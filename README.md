@@ -1,16 +1,15 @@
-# TenCoin
-
-
 # TenCoin (TEC)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Network Status](https://img.shields.io/badge/Network-Mainnet-green.svg)]()
 
-**TenCoin** is a decentralized, peer-to-peer cryptocurrency designed for secure, autonomous, and time-locked transactions. Inspired by Bitcoin, TenCoin introduces advanced features such as **timer transactions**, **verify-code transactions**, and an automated **completed_fee reward system** for miners.
+**TenCoin** is a decentralized, peer-to-peer cryptocurrency designed for secure, autonomous transactions. Inspired by Bitcoin, TenCoin supports standard UTXO-based transactions with advanced script capabilities for **timer** and **verify-code** conditions.
+
+🌐 Official website: [tencoin.io](https://tencoin.io)
 
 ---
 
-## Table of Contents
+## 📖 Table of Contents
 - [Introduction](#introduction)
 - [Key Features](#key-features)
 - [Technical Details](#technical-details)
@@ -22,37 +21,33 @@
 ---
 
 ## Introduction
-TenCoin (TEC) aims to provide a fully autonomous blockchain experience where transactions with time locks and verification codes can be executed automatically by the network without user intervention. It supports standard wallets and is designed for scalability and performance.
+TenCoin (TEC) is a blockchain network that provides secure and autonomous transactions. Scripts can include timers and verify-code conditions directly at the output level, enabling flexible conditional transfers without changing the core UTXO model.  
 
-- **Ticker:** TEC  
-- **Smallest Unit:** Teno (8 decimals, like satoshi)  
-- **Total Supply:** 10,000,000 TEC  
+- **Ticker:** `TEC`  
+- **Smallest Unit:** `Teno` (8 decimals, like satoshi)  
+- **Total Supply:** `10,000,000 TEC`  
 
 ---
 
 ## Key Features
 - **UTXO-based transaction model** for transparency and security.  
-- **Timer transactions**: schedule transfers to be automatically executed at a future time.  
-- **Verify-code transactions**: allow conditional unlocking with a secret code.  
-- **Completed_fee system**: miners earn rewards for completing timer or verify-code transactions.  
-- **Multisig & advanced scripts**: supports timelock, multisignature, and custom script conditions.  
+- **Timer and verify-code scripts**: conditional execution stored at the script level.  
+- **Single transaction fee**: standard fee paid to miners, no additional completed_fee.  
+- **Multisig & advanced scripts**: supports timelock, multisignature, and custom conditions.  
 - **P2P network** with dedicated ports:
-  - Mainnet: `10110` (P2P), `10111` (RPC)  
-  - Testnet: `10112`  
+  - Mainnet: `10110` (P2P), `10111` (RPC)
+    
 - **JSON RPC API**: compatible with standard wallets like Trust Wallet.  
 - **Cross-platform nodes**: lightweight nodes can run autonomously, even on limited hardware.
 
 ---
 
 ## Technical Details
-- **Consensus:** PoW initially, upgradeable to PoS in the future.  
+- **Consensus:** PoW initially, upgradeable to PoS in the future.
 - **Halving:** every 100,000 blocks, initial block reward 50 TEC.  
-- **Transaction Fees:**  
-  - `fee`: paid to miner including transaction in block  
-  - `completed_fee`: reserved at creation, paid when transaction is redeemed or refunded  
-- **Timer behavior:** nodes execute transactions automatically at `set_time`.  
-- **Refund behavior:** handled deterministically; `completed_fee` always paid.  
-- **Verify-code transactions:** `verify_code_input` must match `verify_code_hash` stored in transaction metadata.  
+- **Transaction Fees:** only a standard fee paid to miners.  
+- **Script behavior:** timer or verify-code conditions stored at the output script level; executed when conditions are met.  
+- **Refunds or conditional unlocks:** handled via script execution rules, fully deterministic.
 
 ---
 
@@ -63,9 +58,20 @@ TenCoin (TEC) aims to provide a fully autonomous blockchain experience where tra
 - Cargo >= 1.88.0  
 - Compatible OS: Linux, Windows, macOS  
 
-### Installation
-```bash
+### Installation & Running a Node
+
+
+# Clone the repository
 git clone https://github.com/TenCoin-crypto/TenCoin.git
 cd TenCoin
-cargo build --release
 
+# (Optional) create a virtual environment
+python3 -m venv venv
+source venv/bin/activate   # Linux/macOS
+# venv\Scripts\activate    # Windows
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the node on mainnet
+python tencoin_node.py --network mainnet
