@@ -5,7 +5,7 @@
 
 **TenCoin** is a decentralized, peer-to-peer cryptocurrency designed for secure, autonomous transactions. Inspired by Bitcoin, TenCoin supports standard UTXO-based transactions with advanced script capabilities for **timer** and **verify-code** conditions.
 
-🌐 Official website: [tencoin.io](https://tencoin.io)
+🌐 Official website: [tencoin.org](https://tencoin.org)
 
 ---
 
