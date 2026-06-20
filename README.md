@@ -15,7 +15,7 @@ Tencoin enables secure value transfers, timelocks, hashlocks, refundable payment
 
 The official Tencoin Whitepaper is available here:
 
-📄 **[Tencoin Whitepaper v1.0](./whitepaper/tencoin.pdf)**
+📄 **[Tencoin Whitepaper](./whitepaper/tencoin.pdf)**
 
 ---
 
@@ -52,7 +52,7 @@ Unlike account-based smart contract platforms, Tencoin maintains a simple and de
 | Block Time           | 5 Minutes               |
 | Initial Block Reward | 50 TEC                  |
 | Halving Interval     | Every 100,000 Blocks    |
-| Smallest Unit        | Teno (0.00000001 TEC)   |
+| Smallest Unit        | Teno                    |
 | P2P Port             | 10110                   |
 | RPC Port             | 10111                   |
 
