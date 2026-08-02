@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tencoinlib"
+version = "0.1.2"
+description = "Official Python library for Tencoin – HD wallets, SegWit, BIP39, RPC client"
+readme = "README.md"
+authors = [{ name = "Tencoin Development Team" }]
+license = { text = "MIT" }
+keywords = ["tencoin", "blockchain", "cryptocurrency", "hd-wallet", "bip39", "segwit", "rpc"]
+classifiers = [
+    "Development Status :: 4 - Beta",                 
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "ecdsa>=0.18.0",
+    "requests>=2.28.0",
+    "bech32>=1.2.0",
+    "coincurve>=21.0.0",          
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "black",
+    "ruff",
+]
+async = ["aiohttp>=3.8.0"]
+mnemonic = ["mnemonic>=0.20"]   
+
+[project.urls]
+Homepage = "https://tencoin.org"
+Repository = "https://github.com/tencoinorg/tencoin"
+Issues = "https://github.com/tencoinorg/tencoin/issues"
+Documentation = "https://tencoin-core.readthedocs.io"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tencoinlib*"]

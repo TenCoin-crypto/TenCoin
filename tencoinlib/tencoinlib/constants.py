@@ -1,0 +1,62 @@
+# tencoinlib/constants.py
+
+
+MAINNET_HRP = "tc"
+
+
+COIN_TYPE = 5353
+
+
+# BIP purposes
+BIP44_PURPOSE = 44  # Legacy P2PKH
+BIP49_PURPOSE = 49  # Nested SegWit (reserved for future use)
+BIP84_PURPOSE = 84  # Native SegWit (P2WPKH)
+
+
+# Default BIP84 derivation path for the primary SegWit address
+DERIVATION_PATH = f"m/{BIP84_PURPOSE}'/{COIN_TYPE}'/0'/0/0"
+
+
+BIP39_ENTROPY_BITS = 128  
+BIP39_CHECKSUM_BITS = 4   
+
+
+P2PKH_VERSION = 0x41      
+P2SH_VERSION = 0x32       
+P2WPKH_VERSION = 0        
+
+
+TENOS_PER_TEC = 100_000_000
+DUST_LIMIT = 546
+
+
+DEFAULT_RPC_PORT = 10111
+DEFAULT_P2P_PORT = 10110
+
+
+DEFAULT_RPC_TOKEN = ""
+
+
+DEFAULT_SEED_NODES = [
+    "seed.tencoin.org",
+]
+
+
+DEFAULT_FEE_RATE = 10  
+PRIORITY_FEE_RATE = 20
+ECONOMY_FEE_RATE = 5
+MIN_RELAY_FEE = 1000  
+
+
+MAINNET_MAGIC = b'\x0a\x0d\x0e\x10'
+TESTNET_MAGIC = b'\x0b\x11\x09\x07'
+
+
+OP_DUP = 0x76
+OP_HASH160 = 0xa9
+OP_EQUALVERIFY = 0x88
+OP_CHECKSIG = 0xac
+OP_EQUAL = 0x87
+
+
+DEVELOPER_ADDRESS = "TASH999uKBUFN1AqAkDjJ8dQqWbXw6G5bh"

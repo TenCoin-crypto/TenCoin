@@ -14,11 +14,12 @@ Complete and comprehensive documentation for the Tencoinlib Python library.
 8. [Fee Management](#fee-management)
 9. [Key Management](#key-management)
 10. [Transaction Signing](#transaction-signing)
-11. [Complete Examples](#complete-examples)
-12. [API Reference](#api-reference)
-13. [Error Handling](#error-handling)
-14. [Constants and Configuration](#constants-and-configuration)
-15. [Best Practices](#best-practices)
+11. [Message Signing](#message-signing)
+12. [Complete Examples](#complete-examples)
+13. [API Reference](#api-reference)
+14. [Error Handling](#error-handling)
+15. [Constants and Configuration](#constants-and-configuration)
+16. [Best Practices](#best-practices)
 
 ---
 
@@ -38,6 +39,7 @@ Complete and comprehensive documentation for the Tencoinlib Python library.
   - **P2WSH**: SegWit script addresses (`tc1q...` with 32-byte program)
 - ✅ **Custom Scripts**: Support for multisig and custom redeem/witness scripts
 - ✅ **Transaction Signing**: Automatic detection and signing for SegWit (BIP-143) and Legacy (P2PKH/P2SH) inputs
+- ✅ **Message Signing**: Bitcoin Core–compatible message signing and verification with public key recovery
 - ✅ **Key Derivation**: Standard BIP-84 derivation path `m/84'/5353'/0'/0/0` + generic BIP-32 paths
 - ✅ **Mnemonic Phrases**: 12, 15, 18, 21, or 24 word English mnemonics
 - ✅ **Wallet Recovery**: Restore wallets from mnemonic phrases
@@ -84,6 +86,7 @@ pip install tencoinlib[mnemonic]
 - `ecdsa>=0.18.0` - For transaction signing
 - `requests>=2.28.0` - For RPC client
 - `bech32>=1.2.0` - For SegWit address encoding
+- `coincurve>=13.0.0` - For message signing and public key recovery
 
 ---
 
@@ -1493,6 +1496,201 @@ is_valid = verify(public_key, msg_hash, signature)
 
 ---
 
+## Message Signing
+
+Tencoinlib provides Bitcoin Core–compatible message signing and verification through the `tencoinlib.message` module. This allows users to cryptographically prove ownership of an address by signing arbitrary messages with the corresponding private key — without broadcasting any transaction.
+
+### Overview
+
+The implementation follows the same standard used in Bitcoin Core:
+
+- The message is prefixed with `\x18Tencoin Signed Message:\n` before hashing.
+- The digest is computed as `SHA256(SHA256(prefix + varint(len) + message))`.
+- Signing uses a **recoverable ECDSA signature** (secp256k1), which allows the verifier to reconstruct the public key directly from the signature — no prior knowledge of the public key is required.
+- The output is a **65-byte Base64-encoded** signature: `r[32] + s[32] + recovery_byte[1]`.
+- Recovery bytes `31–34` indicate a **compressed** public key (standard for Tencoin).
+
+> **Dependency**: Message signing requires `coincurve`. Install it with:
+> ```bash
+> pip install coincurve
+> ```
+
+### Importing
+
+```python
+from tencoinlib.message import (
+    sign_message,
+    verify_message,
+    recover_address_from_signature,
+    MessageSigningError,
+)
+
+# Or directly from the top-level package
+from tencoinlib import (
+    sign_message,
+    verify_message,
+    recover_address_from_signature,
+    MessageSigningError,
+)
+```
+
+### Signing a Message
+
+```python
+from tencoinlib import Wallet, sign_message, recover_address_from_signature
+
+# Create or recover a wallet
+wallet = Wallet.create()
+private_key = bytes.fromhex(wallet.get_private_key_hex())
+
+# Define the message to sign
+message = "I am the owner of this Tencoin address."
+
+# Sign the message
+signature = sign_message(private_key, message)
+
+# Recover the corresponding P2PKH address from the signature
+address = recover_address_from_signature(message, signature)
+
+print(f"Address   : {address}")
+print(f"Message   : {message}")
+print(f"Signature : {signature}")
+```
+
+**Example output:**
+
+```
+Address   : TxK9mR3...
+Message   : I am the owner of this Tencoin address.
+Signature : H3k9mR2...  (88-character Base64 string)
+```
+
+### Verifying a Message
+
+```python
+from tencoinlib import verify_message
+
+address   = "TxK9mR3..."     # The claimed address
+message   = "I am the owner of this Tencoin address."
+signature = "H3k9mR2..."     # Base64 signature from sign_message()
+
+is_valid = verify_message(address, message, signature)
+
+if is_valid:
+    print("✓ Signature is valid — message was signed by the owner of this address.")
+else:
+    print("✗ Signature is invalid.")
+```
+
+### Recovering the Signer's Address
+
+When you only have the message and signature (but not the address), you can recover the signer's address directly:
+
+```python
+from tencoinlib import recover_address_from_signature
+
+message   = "I am the owner of this Tencoin address."
+signature = "H3k9mR2..."
+
+address = recover_address_from_signature(message, signature)
+
+if address:
+    print(f"Signer's address: {address}")
+else:
+    print("Address recovery failed — invalid signature.")
+```
+
+### Signing File Hashes
+
+A common use case is proving ownership of a file by signing its SHA256 hash:
+
+```python
+import hashlib
+from tencoinlib import Wallet, sign_message, verify_message
+
+def hash_file(path: str) -> str:
+    sha256 = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+wallet = Wallet.create()
+private_key = bytes.fromhex(wallet.get_private_key_hex())
+
+# Hash the file and sign its hex digest as a message
+file_hash = hash_file("document.pdf")
+signature = sign_message(private_key, file_hash)
+
+print(f"File SHA256 : {file_hash}")
+print(f"Signature   : {signature}")
+
+# Verify later
+is_valid = verify_message(wallet.get_address("p2pkh"), file_hash, signature)
+print(f"Valid: {is_valid}")
+```
+
+### Error Handling
+
+```python
+from tencoinlib import sign_message, verify_message, MessageSigningError
+
+# Signing
+try:
+    signature = sign_message(private_key, message)
+except MessageSigningError as e:
+    print(f"Signing failed: {e}")
+
+# Verification
+try:
+    is_valid = verify_message(address, message, signature)
+except MessageSigningError as e:
+    # Raised for malformed signatures (invalid Base64, wrong length, bad recovery byte)
+    print(f"Verification error: {e}")
+```
+
+Common causes of `MessageSigningError`:
+
+| Cause | Description |
+|---|---|
+| `coincurve` not installed | Install with `pip install coincurve` |
+| Private key is not 32 bytes | Must be exactly 32 bytes |
+| Invalid Base64 signature | Signature string is malformed |
+| Signature length ≠ 65 bytes | Decoded bytes must be exactly 65 |
+| Invalid recovery byte | Must be in the range 27–34 |
+
+### Address Compatibility
+
+Message signing only supports **P2PKH addresses** (`T...`). SegWit addresses (`tc1q...`) and P2SH addresses (`M...`) are not supported by the message signing standard, consistent with Bitcoin Core behavior.
+
+```python
+from tencoinlib import Wallet, sign_message, recover_address_from_signature
+
+wallet = Wallet.create()
+private_key = bytes.fromhex(wallet.get_private_key_hex())
+
+# Use P2PKH address for message signing
+p2pkh_address = wallet.get_address("p2pkh")   # T...
+
+signature = sign_message(private_key, "Hello Tencoin!")
+recovered  = recover_address_from_signature("Hello Tencoin!", signature)
+
+assert recovered == p2pkh_address  # Always holds for the same key
+```
+
+### Recovery Byte and Signature Format
+
+The recovery byte encodes both the parity of the public key's Y coordinate and whether the key is compressed:
+
+| Recovery byte | Meaning |
+|---|---|
+| 31–34 | Compressed public key (standard for Tencoin) |
+| 27–30 | Uncompressed public key (legacy compatibility) |
+
+Unlike Bitcoin (which almost exclusively produces `H` or `I` signatures due to its `0x00` address version byte), Tencoin uses version byte `0x41`, which allows all four values — `H`, `I`, `J`, `K` — to appear depending on the key. This is expected behavior and does not affect validity.
+
+---
+
 ## Complete Examples
 
 ### Example 1: Complete Wallet Setup
@@ -2056,6 +2254,46 @@ SegWit transaction signer (BIP-143) for P2WPKH addresses.
   - `sort_pubkeys` - If True, sort pubkeys for canonical form (recommended)
 - **Returns**: Script bytes to pass to `get_address("p2sh", script=...)` or `get_address("p2wsh", script=...)`
 
+### Message Signing Module
+
+#### sign_message
+
+**`sign_message(private_key: bytes, message: str) -> str`**
+- Sign an arbitrary message with a secp256k1 private key.
+- **Parameters**:
+  - `private_key` — 32-byte raw private key
+  - `message` — UTF-8 message string
+- **Returns**: Base64-encoded 65-byte recoverable signature
+- **Raises**: `MessageSigningError` if `coincurve` is unavailable or signing fails
+
+#### verify_message
+
+**`verify_message(address: str, message: str, signature_b64: str) -> bool`**
+- Verify that a signature was produced by the owner of the given P2PKH address.
+- Recovers the public key from the signature and compares the derived address.
+- Supports both compressed (31–34) and uncompressed (27–30) recovery bytes.
+- **Parameters**:
+  - `address` — Tencoin P2PKH address (`T...`)
+  - `message` — Original UTF-8 message string
+  - `signature_b64` — Base64-encoded signature from `sign_message()`
+- **Returns**: `True` if valid, `False` if the signature does not match the address
+- **Raises**: `MessageSigningError` for malformed input (invalid Base64, wrong length, bad recovery byte)
+
+#### recover_address_from_signature
+
+**`recover_address_from_signature(message: str, signature_b64: str) -> Optional[str]`**
+- Recover the P2PKH address of the signer without knowing it in advance.
+- **Parameters**:
+  - `message` — Original UTF-8 message string
+  - `signature_b64` — Base64-encoded signature from `sign_message()`
+- **Returns**: Tencoin P2PKH address string, or `None` if recovery fails
+- **Raises**: `MessageSigningError` if `coincurve` is unavailable
+
+#### MessageSigningError
+
+**`class MessageSigningError(Exception)`**
+- Raised for all message signing and verification errors, including missing dependencies, malformed input, and cryptographic failures.
+
 ---
 
 ## Error Handling
@@ -2077,6 +2315,7 @@ from tencoinlib.rpc import (
     ResponseError,
     InvalidMethodError
 )
+from tencoinlib.message import MessageSigningError
 ```
 
 ### Wallet Errors
@@ -2106,6 +2345,22 @@ except AddressError:
     print("Invalid address")
 except TransactionBuilderError as e:
     print(f"Transaction builder error: {e}")
+```
+
+### Message Signing Errors
+
+```python
+from tencoinlib import sign_message, verify_message, MessageSigningError
+
+try:
+    signature = sign_message(private_key, "Hello Tencoin!")
+except MessageSigningError as e:
+    print(f"Signing error: {e}")
+
+try:
+    is_valid = verify_message(address, "Hello Tencoin!", signature)
+except MessageSigningError as e:
+    print(f"Verification error: {e}")
 ```
 
 ### Signing Errors
@@ -2201,6 +2456,26 @@ from tencoinlib.constants import (
 ---
 
 ## Best Practices
+
+### Message Signing
+
+1. **Always use P2PKH addresses for message signing**
+   ```python
+   # Correct — use P2PKH address (T...)
+   address = wallet.get_address("p2pkh")
+   is_valid = verify_message(address, message, signature)
+   ```
+
+2. **Verify before trusting**
+   - Always call `verify_message()` on receipt before acting on a signed claim.
+
+3. **Sign file hashes, not file contents**
+   - Pass the hex SHA256 digest of a file as the message to keep signatures portable and reproducible.
+
+4. **Do not reuse signatures across contexts**
+   - A valid signature proves ownership at the time of signing. Include timestamps or nonces in the message when freshness matters.
+
+---
 
 ### Security
 
