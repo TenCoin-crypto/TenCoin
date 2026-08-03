@@ -69,31 +69,31 @@ The following sections describe each native conditional output type and the vali
 
 | Flag | Native Condition |
 |------|-------------------|
-| 0x01 | Timelock |
-| 0x02 | Hashlock |
-| 0x03 | Timelock + Hashlock |
-| 0x04 | Hashlock + Expiry + Refund |
-| 0x05 | Timelock + Hashlock + Expiry + Refund |
+| 0xC1 | Timelock |
+| 0xC2 | Hashlock |
+| 0xC3 | Timelock + Hashlock |
+| 0xC4 | Hashlock + Expiry + Refund |
+| 0xC5 | Timelock + Hashlock + Expiry + Refund |
 
 ### Native Condition Types
 
-**Timelock (0x01)**
+**Timelock (0xC1)**
 
 Locks an output until a specified block height or timestamp is reached. The output may be spent only after the lock condition becomes valid.
 
-**Hashlock (0x02)**
+**Hashlock (0xC2)**
 
 Locks an output with a cryptographic hash. The output may be spent only by providing the original preimage corresponding to the stored hash.
 
-**Timelock + Hashlock (0x03)**
+**Timelock + Hashlock (0xC3)**
 
 Combines a timelock and a hashlock. The output may be spent only after the timelock has expired and a valid preimage has been provided.
 
-**Hashlock + Expiry + Refund (0x04)**
+**Hashlock + Expiry + Refund (0xC4)**
 
 Allows an output to be redeemed by presenting a valid preimage before a specified expiration point. After expiration, the funds become spendable by a designated refund recipient.
 
-**Timelock + Hashlock + Expiry + Refund (0x05)**
+**Timelock + Hashlock + Expiry + Refund (0xC5)**
 
 Combines delayed availability, secret-based redemption, and refundable transfer behavior. The output becomes spendable only after the timelock condition is satisfied, may be redeemed with a valid preimage before expiration, and may be reclaimed by the refund recipient after expiration.
 
