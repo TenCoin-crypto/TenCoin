@@ -35,7 +35,7 @@ from .message import (
 from .integrity import compute_library_hash, get_file_manifest
 
 # Version
-__version__ = "0.1.2"
+__version__ = "0.1.4"
 
 __all__ = [
     # Constants

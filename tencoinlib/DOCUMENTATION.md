@@ -14,12 +14,13 @@ Complete and comprehensive documentation for the Tencoinlib Python library.
 8. [Fee Management](#fee-management)
 9. [Key Management](#key-management)
 10. [Transaction Signing](#transaction-signing)
-11. [Message Signing](#message-signing)
-12. [Complete Examples](#complete-examples)
-13. [API Reference](#api-reference)
-14. [Error Handling](#error-handling)
-15. [Constants and Configuration](#constants-and-configuration)
-16. [Best Practices](#best-practices)
+11. [Multisig Transactions](#multisig-transactions)
+12. [Message Signing](#message-signing)
+13. [Complete Examples](#complete-examples)
+14. [API Reference](#api-reference)
+15. [Error Handling](#error-handling)
+16. [Constants and Configuration](#constants-and-configuration)
+17. [Best Practices](#best-practices)
 
 ---
 
@@ -38,7 +39,7 @@ Complete and comprehensive documentation for the Tencoinlib Python library.
   - **Legacy P2SH**: Pay-to-script-hash addresses (`M...`)
   - **P2WSH**: SegWit script addresses (`tc1q...` with 32-byte program)
 - ✅ **Custom Scripts**: Support for multisig and custom redeem/witness scripts
-- ✅ **Transaction Signing**: Automatic detection and signing for SegWit (BIP-143) and Legacy (P2PKH/P2SH) inputs
+- ✅ **Transaction Signing**: Automatic detection and signing for SegWit (BIP-143), Legacy (P2PKH/P2SH), and Multisig (P2SH/P2WSH, any m-of-n up to 15-of-15) inputs
 - ✅ **Message Signing**: Bitcoin Core–compatible message signing and verification with public key recovery
 - ✅ **Key Derivation**: Standard BIP-84 derivation path `m/84'/5353'/0'/0/0` + generic BIP-32 paths
 - ✅ **Mnemonic Phrases**: 12, 15, 18, 21, or 24 word English mnemonics
@@ -994,6 +995,551 @@ is_valid = SegWitSigner.verify_witness(
 
 print(f"Signature valid: {is_valid}")
 ```
+
+---
+
+## Multisig Transactions
+
+Multisig (multi-signature) transactions require M-of-N participants to sign before funds can be spent. Tencoinlib supports two multisig address types:
+
+- **P2SH multisig** (`M...`): Legacy multisig — redeem script is revealed at spend time.
+- **P2WSH multisig** (`tc1q...`): Native SegWit multisig — lower fees, same security model.
+
+Both types support any m-of-n combination from 1-of-1 up to 15-of-15.
+
+### Overview
+
+| Type | Address | Script committed at creation | Signing overhead |
+|---|---|---|---|
+| P2SH multisig | `M...` | Hash of redeem script | scriptSig |
+| P2WSH multisig | `tc1q...` | Hash of witness script | Witness |
+
+### Key Concepts
+
+**Redeem script / Witness script**: The raw multisig script that encodes M, N, and all N public keys. For P2SH this is called the redeem script; for P2WSH it is called the witness script. Both are built with `build_multisig_script()`.
+
+**Script hash**: The on-chain address stores only the hash of this script. The full script must be provided again at spend time.
+
+**Canonical pubkey ordering**: Passing `sort_pubkeys=True` (the default) sorts the public keys lexicographically before embedding them in the script. All participants must use the same ordering, so always sort or always preserve insertion order — never mix.
+
+---
+
+### Building a Multisig Address
+
+#### P2SH Multisig Address (M...)
+
+```python
+from tencoinlib.transaction import build_multisig_script, script_to_p2sh_address
+
+# Compressed public keys from each participant (33 bytes each)
+pubkeys = [
+    bytes.fromhex("02a1b2c3d4e5f6..."),   # Participant 1
+    bytes.fromhex("03d4e5f6a1b2c3..."),   # Participant 2
+    bytes.fromhex("0298a7b8c9d0e1..."),   # Participant 3
+]
+
+# Build 2-of-3 multisig redeem script
+redeem_script = build_multisig_script(m=2, pubkeys=pubkeys, sort_pubkeys=True)
+print(f"Redeem script ({len(redeem_script)} bytes): {redeem_script.hex()}")
+
+# Derive P2SH address from the redeem script
+p2sh_address = script_to_p2sh_address(redeem_script)
+print(f"P2SH multisig address: {p2sh_address}")   # M...
+
+# Save the redeem script — you need it to spend funds later
+```
+
+#### P2WSH Multisig Address (tc1q...)
+
+```python
+from tencoinlib.transaction import build_multisig_script, script_to_p2wsh_address
+
+pubkeys = [
+    bytes.fromhex("02a1b2c3d4e5f6..."),
+    bytes.fromhex("03d4e5f6a1b2c3..."),
+    bytes.fromhex("0298a7b8c9d0e1..."),
+]
+
+# Build 2-of-3 multisig witness script (identical call — same function)
+witness_script = build_multisig_script(m=2, pubkeys=pubkeys, sort_pubkeys=True)
+
+# Derive P2WSH address (SegWit native — lower fees)
+p2wsh_address = script_to_p2wsh_address(witness_script)
+print(f"P2WSH multisig address: {p2wsh_address}")  # tc1q...
+
+# Save the witness script — you need it to spend funds later
+```
+
+#### Using Wallet.build_multisig_script()
+
+The `Wallet` class provides a convenience static method that also accepts hex strings:
+
+```python
+from tencoinlib import Wallet
+from tencoinlib.transaction import script_to_p2sh_address, script_to_p2wsh_address
+
+pubkeys_hex = [
+    "02a1b2c3d4e5f6...",
+    "03d4e5f6a1b2c3...",
+    "0298a7b8c9d0e1...",
+]
+
+# Accepts both bytes and hex strings
+script = Wallet.build_multisig_script(m=2, pubkeys=pubkeys_hex, sort_pubkeys=True)
+
+p2sh_addr  = script_to_p2sh_address(script)
+p2wsh_addr = script_to_p2wsh_address(script)
+
+print(f"P2SH : {p2sh_addr}")
+print(f"P2WSH: {p2wsh_addr}")
+```
+
+---
+
+### Deriving Participant Keys
+
+Each participant in a multisig wallet derives their own key independently. The public keys are then shared and combined to create the multisig address.
+
+```python
+from tencoinlib import Wallet
+from tencoinlib.keys.ec import privkey_to_pubkey
+from tencoinlib.keys.bip32 import derive_path_from_seed
+
+# --- Participant 1 ---
+wallet1 = Wallet.create()
+seed1 = wallet1.seed
+priv1, _ = derive_path_from_seed(seed1, "m/84'/5353'/0'/0/0")
+pub1 = privkey_to_pubkey(priv1, compressed=True)
+
+# --- Participant 2 ---
+wallet2 = Wallet.create()
+seed2 = wallet2.seed
+priv2, _ = derive_path_from_seed(seed2, "m/84'/5353'/0'/0/0")
+pub2 = privkey_to_pubkey(priv2, compressed=True)
+
+# --- Participant 3 ---
+wallet3 = Wallet.create()
+seed3 = wallet3.seed
+priv3, _ = derive_path_from_seed(seed3, "m/84'/5353'/0'/0/0")
+pub3 = privkey_to_pubkey(priv3, compressed=True)
+
+# Participants exchange public keys and build the shared address
+from tencoinlib.transaction import build_multisig_script, script_to_p2wsh_address
+
+witness_script = build_multisig_script(m=2, pubkeys=[pub1, pub2, pub3], sort_pubkeys=True)
+shared_address = script_to_p2wsh_address(witness_script)
+
+print(f"Shared 2-of-3 P2WSH address: {shared_address}")
+print(f"Witness script: {witness_script.hex()}")
+```
+
+> **Important**: Every participant must store the complete `witness_script` (or `redeem_script` for P2SH). Without it, funds cannot be recovered. It is not stored on-chain at deposit time.
+
+---
+
+### Signing a Multisig Transaction
+
+#### Private Keys Format
+
+`sign_transaction` accepts three equivalent formats for `private_keys`. All three produce identical results:
+
+```python
+# Format 1 — flat list (original single-sig API, one key per input)
+# Works only when each input needs exactly one key.
+private_keys = [key1, key2]
+
+# Format 2 — nested list (one list of keys per input, recommended for multisig)
+private_keys = [
+    [key1, key2],       # Input 0: two keys for a 2-of-3 multisig
+    [key3],             # Input 1: one key for a single-sig input
+]
+
+# Format 3 — mixed (flat bytes and lists in the same list)
+private_keys = [
+    key_a,              # single key → wrapped automatically to [key_a]
+    [key_b, key_c],     # multiple keys for a multisig input
+]
+```
+
+Additionally, extra co-signer keys can always be attached directly to the UTXO dict instead:
+
+```python
+utxo = {
+    "address": p2wsh_address,
+    "value": 5_000_000,
+    "witness_script": witness_script,
+    "cosigner_keys": [key2, key3],   # merged with whatever is in private_keys[i]
+}
+# private_keys[i] = key1   (first key)
+# Final set used for signing: {key1, key2, key3}  (deduplicated by pubkey)
+```
+
+Both sources of keys are merged and deduplicated automatically — there is no need to avoid overlap.
+
+---
+
+#### P2WSH Multisig Transaction (SegWit, tc1q...)
+
+```python
+from tencoinlib import TransactionSigner, TransactionBuilder
+from tencoinlib.transaction import (
+    build_multisig_script,
+    script_to_p2wsh_address,
+    address_to_script,
+)
+
+# --- Setup (all participants agree on the same script) ---
+witness_script = build_multisig_script(m=2, pubkeys=[pub1, pub2, pub3], sort_pubkeys=True)
+p2wsh_address  = script_to_p2wsh_address(witness_script)
+
+# --- Build transaction ---
+builder = TransactionBuilder()
+builder.add_input(
+    txid="abcdef1234567890" * 4,         # 64-char hex TXID
+    vout=0,
+    value=5_000_000,                     # Tenos
+    script_pubkey=address_to_script(p2wsh_address)
+)
+builder.add_output("tc1q...", 4_000_000) # recipient
+builder.set_change_address(p2wsh_address)
+builder.set_fee_rate(20)
+
+tx, estimated_fee = builder.build()
+print(f"Estimated fee: {estimated_fee} Tenos")
+
+# --- Sign (2-of-3: participant 1 and participant 2 sign) ---
+utxos = [{
+    "address":       p2wsh_address,
+    "value":         5_000_000,
+    "witness_script": witness_script,    # required for P2WSH
+}]
+
+# Nested list: both keys for the single P2WSH input
+private_keys = [[priv1, priv2]]
+
+signed_tx = TransactionSigner.sign_transaction(tx, utxos, private_keys)
+
+print(f"TXID          : {signed_tx.txid()}")
+print(f"Has witness   : {signed_tx.has_witness}")
+print(f"Witness items : {len(signed_tx.vin[0].witness)}")
+# witness items = 1 (OP_0 placeholder) + 2 (signatures) + 1 (witness_script) = 4
+```
+
+#### P2SH Multisig Transaction (Legacy, M...)
+
+```python
+from tencoinlib import TransactionSigner, TransactionBuilder
+from tencoinlib.transaction import (
+    build_multisig_script,
+    script_to_p2sh_address,
+    address_to_script,
+)
+
+# --- Setup ---
+redeem_script = build_multisig_script(m=2, pubkeys=[pub1, pub2, pub3], sort_pubkeys=True)
+p2sh_address  = script_to_p2sh_address(redeem_script)
+
+# --- Build transaction ---
+builder = TransactionBuilder()
+builder.add_input(
+    txid="abcdef1234567890" * 4,
+    vout=0,
+    value=5_000_000,
+    script_pubkey=address_to_script(p2sh_address)
+)
+builder.add_output("tc1q...", 4_000_000)
+builder.set_change_address(p2sh_address)
+
+tx, estimated_fee = builder.build()
+
+# --- Sign (2-of-3: participant 1 and participant 2 sign) ---
+utxos = [{
+    "address":       p2sh_address,
+    "script_pubkey": address_to_script(p2sh_address),
+    "redeem_script": redeem_script,      # required for P2SH
+    "value":         5_000_000,
+}]
+
+private_keys = [[priv1, priv2]]
+
+signed_tx = TransactionSigner.sign_transaction(tx, utxos, private_keys)
+
+print(f"TXID           : {signed_tx.txid()}")
+print(f"ScriptSig size : {len(signed_tx.vin[0].script_sig)} bytes")
+# scriptSig = OP_0 <sig1> <sig2> PUSHDATA1 <len> <redeem_script>
+```
+
+---
+
+### Mixed Inputs: Multisig and Single-Sig in One Transaction
+
+`TransactionSigner` handles any combination of address types in a single call. Each input is signed independently according to its own address type.
+
+```python
+from tencoinlib import TransactionSigner, TransactionBuilder, Wallet
+from tencoinlib.transaction import (
+    build_multisig_script,
+    script_to_p2wsh_address,
+    address_to_script,
+)
+
+single_wallet    = Wallet.create()
+single_address   = single_wallet.get_address()            # P2WPKH tc1q...
+single_priv      = bytes.fromhex(single_wallet.get_private_key_hex())
+
+witness_script   = build_multisig_script(m=2, pubkeys=[pub1, pub2, pub3], sort_pubkeys=True)
+multisig_address = script_to_p2wsh_address(witness_script) # P2WSH tc1q...
+
+# --- Build transaction with two inputs ---
+builder = TransactionBuilder()
+
+# Input 0: single-sig P2WPKH
+builder.add_input(
+    txid="aaaa" * 16,
+    vout=0,
+    value=2_000_000,
+    script_pubkey=address_to_script(single_address)
+)
+
+# Input 1: 2-of-3 P2WSH multisig
+builder.add_input(
+    txid="bbbb" * 16,
+    vout=1,
+    value=3_000_000,
+    script_pubkey=address_to_script(multisig_address)
+)
+
+builder.add_output("tc1q...", 4_000_000)
+builder.set_change_address(single_address)
+tx, fee = builder.build()
+
+# --- Sign: flat key for input 0, nested list for input 1 ---
+utxos = [
+    {
+        "address": single_address,
+        "value":   2_000_000,
+    },
+    {
+        "address":        multisig_address,
+        "value":          3_000_000,
+        "witness_script": witness_script,
+    },
+]
+
+private_keys = [
+    single_priv,          # Input 0: one key (flat bytes)
+    [priv1, priv2],       # Input 1: two keys (nested list)
+]
+
+signed_tx = TransactionSigner.sign_transaction(tx, utxos, private_keys)
+
+print(f"TXID         : {signed_tx.txid()}")
+print(f"Has witness  : {signed_tx.has_witness}")     # True
+print(f"Input 0 witness items : {len(signed_tx.vin[0].witness)}")  # 2 (P2WPKH)
+print(f"Input 1 witness items : {len(signed_tx.vin[1].witness)}")  # 4 (P2WSH 2-of-3)
+```
+
+---
+
+### Using cosigner_keys in the UTXO Dict
+
+When co-signers provide their keys through a different code path (e.g., collected over the network), attach them directly to the UTXO dict via `cosigner_keys`. They are merged with the `private_keys` argument automatically.
+
+```python
+utxos = [{
+    "address":        p2wsh_address,
+    "value":          5_000_000,
+    "witness_script": witness_script,
+    "cosigner_keys":  [priv2, priv3],   # keys from co-signers
+}]
+
+# private_keys provides priv1; cosigner_keys adds priv2 and priv3.
+# Final set: {priv1, priv2, priv3} — deduplicated by pubkey.
+private_keys = [priv1]
+
+signed_tx = TransactionSigner.sign_transaction(tx, utxos, private_keys)
+```
+
+> The same `cosigner_keys` field works identically for P2SH multisig inputs.
+
+---
+
+### Complete End-to-End Example
+
+```python
+from tencoinlib import Wallet, TransactionSigner, TransactionBuilder
+from tencoinlib.transaction import (
+    build_multisig_script,
+    script_to_p2wsh_address,
+    address_to_script,
+)
+from tencoinlib.keys.ec import privkey_to_pubkey
+from tencoinlib.keys.bip32 import derive_path_from_seed
+from tencoinlib.rpc import RPCClient
+from tencoinlib.constants import TENOS_PER_TEC
+
+# ── 1. Key generation (each participant runs this independently) ──────────
+wallet1 = Wallet.create()
+wallet2 = Wallet.create()
+wallet3 = Wallet.create()
+
+priv1, _ = derive_path_from_seed(wallet1.seed, "m/84'/5353'/0'/0/0")
+priv2, _ = derive_path_from_seed(wallet2.seed, "m/84'/5353'/0'/0/0")
+priv3, _ = derive_path_from_seed(wallet3.seed, "m/84'/5353'/0'/0/0")
+
+pub1 = privkey_to_pubkey(priv1, compressed=True)
+pub2 = privkey_to_pubkey(priv2, compressed=True)
+pub3 = privkey_to_pubkey(priv3, compressed=True)
+
+# ── 2. Build shared address (all participants must agree) ─────────────────
+witness_script = build_multisig_script(m=2, pubkeys=[pub1, pub2, pub3], sort_pubkeys=True)
+multisig_addr  = script_to_p2wsh_address(witness_script)
+
+print(f"2-of-3 P2WSH address : {multisig_addr}")
+print(f"Witness script       : {witness_script.hex()}")
+print()
+
+# ── 3. (Off-chain) Fund the multisig address, then retrieve UTXOs ─────────
+rpc   = RPCClient(host="127.0.0.1", port=10111, token="your-token")
+utxos = rpc.list_unspent(multisig_addr)
+
+if not utxos:
+    print("No UTXOs found — send funds to the multisig address first.")
+    exit(1)
+
+total_available = sum(u["amount"] for u in utxos)
+print(f"Available: {total_available / TENOS_PER_TEC:.8f} TEC across {len(utxos)} UTXO(s)")
+
+# ── 4. Build the spending transaction ─────────────────────────────────────
+SEND_AMOUNT    = 1_000_000    # 0.01 TEC
+recipient_addr = "tc1q..."    # replace with actual recipient
+
+builder = TransactionBuilder()
+for u in utxos:
+    builder.add_input(
+        txid=u["txid"],
+        vout=u["vout"],
+        value=u["amount"],
+        script_pubkey=address_to_script(multisig_addr)
+    )
+builder.add_output(recipient_addr, SEND_AMOUNT)
+builder.set_change_address(multisig_addr)
+builder.set_fee_rate(20)
+
+tx, estimated_fee = builder.build()
+print(f"Estimated fee: {estimated_fee} Tenos")
+
+# ── 5. Sign (participants 1 and 2 provide signatures) ─────────────────────
+utxo_data = [{
+    "address":        multisig_addr,
+    "value":          u["amount"],
+    "witness_script": witness_script,
+} for u in utxos]
+
+# Nested list: one key-list per input (all inputs share the same multisig here)
+private_keys = [[priv1, priv2]] * len(utxos)
+
+signed_tx = TransactionSigner.sign_transaction(tx, utxo_data, private_keys)
+
+print(f"TXID     : {signed_tx.txid()}")
+print(f"Size     : {signed_tx.calculate_size()} bytes")
+print(f"vSize    : {signed_tx.calculate_vsize()} bytes")
+
+# ── 6. Validate and broadcast ─────────────────────────────────────────────
+tx_hex = signed_tx.serialize().hex()
+
+result = rpc.test_mempool_accept(tx_hex)
+if not result.get("allowed"):
+    print(f"Transaction rejected: {result.get('reject-reason', 'unknown')}")
+    exit(1)
+
+txid = rpc.send_raw_transaction(tx_hex)
+print(f"\n✅ Transaction broadcast successfully!")
+print(f"TXID: {txid}")
+```
+
+---
+
+### Supported m-of-n Combinations
+
+All combinations from 1-of-1 up to 15-of-15 are supported. Practical limits imposed by the Tencoin node's script size policy may apply for very large n.
+
+| m \ n | 1 | 2 | 3 | 5 | 10 | 15 |
+|---|---|---|---|---|---|---|
+| 1 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2 | — | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 3 | — | — | ✅ | ✅ | ✅ | ✅ |
+| 5 | — | — | — | ✅ | ✅ | ✅ |
+| 10 | — | — | — | — | ✅ | ✅ |
+| 15 | — | — | — | — | — | ✅ |
+
+**Script size and push opcode used for the redeem/witness script in scriptSig:**
+
+| n | Script size | Push opcode |
+|---|---|---|
+| 1–2 | ≤ 75 bytes | Single byte length prefix |
+| 3–7 | 76–255 bytes | `OP_PUSHDATA1` (0x4c) |
+| 8–15 | 256–513 bytes | `OP_PUSHDATA2` (0x4d) |
+
+Tencoinlib selects the correct push opcode automatically via `_push_data`.
+
+---
+
+### Error Handling
+
+```python
+from tencoinlib import TransactionSigner, SigningError
+from tencoinlib.transaction import ScriptError
+
+# Not enough matching private keys for the required m
+try:
+    signed_tx = TransactionSigner.sign_transaction(tx, utxos, [[priv1]])
+    # Will raise if 2-of-3 is required and only 1 key is provided
+except SigningError as e:
+    print(f"Signing failed: {e}")
+    # e.g. "multisig requires 2 signatures but only 1 matching private keys provided"
+
+# Missing witness_script for a P2WSH input
+try:
+    signed_tx = TransactionSigner.sign_transaction(
+        tx,
+        [{"address": p2wsh_address, "value": 1_000_000}],   # no witness_script
+        [priv1]
+    )
+except SigningError as e:
+    print(f"Signing failed: {e}")
+    # "P2WSH input UTXO must contain 'witness_script'"
+
+# Invalid multisig parameters
+try:
+    from tencoinlib.transaction import build_multisig_script
+    build_multisig_script(m=5, pubkeys=[pub1, pub2])   # m > n
+except ScriptError as e:
+    print(f"Script error: {e}")
+    # "m and n must be 1..16 and m <= n"
+```
+
+---
+
+### Best Practices for Multisig
+
+1. **Always store the full script** — the redeem script (P2SH) or witness script (P2WSH) is not stored on-chain at deposit time. Every participant should back it up independently.
+
+2. **Use `sort_pubkeys=True` consistently** — all participants must build the script with the same pubkey order. Sorting guarantees determinism regardless of insertion order.
+
+3. **Prefer P2WSH over P2SH** — P2WSH uses the witness field, which is discounted in vSize calculation. For large multisig scripts (n ≥ 3) the fee saving is significant.
+
+4. **Verify the address before sending funds** — all participants should independently derive the multisig address from the agreed script and confirm it matches before depositing.
+
+5. **Test on small amounts first** — always send a small test amount, verify you can spend it, then use the address for larger amounts.
+
+6. **Use `test_mempool_accept` before broadcasting** — validates the signed transaction against node policy without risking a broadcast failure.
+
+   ```python
+   result = rpc.test_mempool_accept(signed_tx.serialize().hex())
+   if result.get("allowed"):
+       txid = rpc.send_raw_transaction(signed_tx.serialize().hex())
+   ```
 
 ---
 
@@ -2064,15 +2610,23 @@ Universal transaction signer that automatically detects address types and uses t
 
 #### Static Methods
 
-**`sign_transaction(tx: Transaction, utxos: List[dict], private_keys: List[bytes]) -> Transaction`**
-- Sign a transaction with mixed input types (SegWit and Legacy)
+**`sign_transaction(tx: Transaction, utxos: List[dict], private_keys: Union[List[bytes], List[List[bytes]]]) -> Transaction`**
+- Sign a transaction with any combination of address types
 - **Parameters**:
   - `tx` - Unsigned transaction
-  - `utxos` - List of UTXO dictionaries with `value`, `script_pubkey`, `address`, and optionally `redeem_script` (for P2SH)
-  - `private_keys` - List of private keys (32 bytes each)
+  - `utxos` - List of UTXO dictionaries. Fields by type:
+    - All: `address` (str)
+    - P2PKH / P2SH: `script_pubkey` (bytes)
+    - P2SH: `redeem_script` (bytes, required), `cosigner_keys` (List[bytes], optional)
+    - P2WPKH: `value` (int)
+    - P2WSH: `value` (int), `witness_script` (bytes, required), `cosigner_keys` (List[bytes], optional)
+  - `private_keys` - One entry per input. Three accepted formats:
+    - Flat: `[key_a, key_b]` — one key per input (single-sig)
+    - Nested: `[[key_a1, key_a2], [key_b1]]` — one list per input (multisig)
+    - Mixed: `[key_a, [key_b1, key_b2]]` — any combination
 - **Returns**: Signed transaction
-- **Raises**: `SigningError` if signing fails
-- **Supported Address Types**: P2WPKH (tc1q...), P2PKH (T...), P2SH (M...)
+- **Raises**: `SigningError` if signing fails or fewer keys than required m are provided
+- **Supported Address Types**: P2WPKH, P2WSH, P2PKH, P2SH (single-sig and multisig)
 
 ### LegacySigner Class
 
@@ -2080,36 +2634,42 @@ Legacy transaction signer for P2PKH and P2SH addresses.
 
 #### Static Methods
 
-**`sign_transaction(tx: Transaction, utxos: List[dict], private_keys: List[bytes]) -> Transaction`**
-- Sign a complete transaction with Legacy inputs (P2PKH or P2SH)
+**`sign_transaction(tx: Transaction, utxos: List[dict], private_keys: Union[List[bytes], List[List[bytes]]]) -> Transaction`**
+- Sign a complete transaction with Legacy inputs (P2PKH or P2SH, single-sig or multisig)
 - **Parameters**:
   - `tx` - Unsigned transaction
-  - `utxos` - List of UTXO dictionaries with `value`, `script_pubkey`, `address`, and optionally `redeem_script` (for P2SH)
-  - `private_keys` - List of private keys (32 bytes each)
+  - `utxos` - List of UTXO dictionaries with `address`, `script_pubkey`, and optionally `redeem_script` and `cosigner_keys`
+  - `private_keys` - Flat, nested, or mixed list of keys (same format as `TransactionSigner`)
 - **Returns**: Signed transaction
 - **Raises**: `SigningError` if signing fails
 
 **`sign_p2pkh_input(tx: Transaction, input_index: int, private_key: bytes, script_pubkey: bytes, sighash_type: int = 1)`**
-- Sign a P2PKH input
+- Sign a P2PKH input. Produces `scriptSig = <sig> <pubkey>`.
 - **Parameters**:
-  - `tx` - Transaction (will be modified)
+  - `tx` - Transaction (modified in place)
   - `input_index` - Input index to sign
   - `private_key` - 32-byte private key
-  - `script_pubkey` - ScriptPubKey of the UTXO (P2PKH script)
+  - `script_pubkey` - ScriptPubKey of the UTXO
   - `sighash_type` - SIGHASH type (default: SIGHASH_ALL = 1)
 
-**`sign_p2sh_input(tx: Transaction, input_index: int, private_key: bytes, redeem_script: bytes, script_pubkey: bytes, sighash_type: int = 1)`**
-- Sign a P2SH input (single-sig P2SH, e.g. P2SH-wrapped P2PKH)
+**`sign_p2sh_input(tx: Transaction, input_index: int, keys_for_input: List[bytes], redeem_script: bytes, script_pubkey: bytes, sighash_type: int = 1)`**
+- Unified P2SH input signer — auto-detects single-sig vs multisig from the redeem script.
+- For single-sig: `scriptSig = <sig> <pubkey> <redeem_script>`
+- For multisig: `scriptSig = OP_0 <sig1> ... <sigM> <redeem_script>`
 - **Parameters**:
-  - `tx` - Transaction (will be modified)
+  - `tx` - Transaction (modified in place)
   - `input_index` - Input index to sign
-  - `private_key` - 32-byte private key
-  - `redeem_script` - Redeem script (e.g. P2PKH script)
-  - `script_pubkey` - ScriptPubKey of the UTXO (P2SH script)
+  - `keys_for_input` - All available private keys for this input
+  - `redeem_script` - Redeem script bytes
+  - `script_pubkey` - ScriptPubKey of the UTXO
   - `sighash_type` - SIGHASH type (default: SIGHASH_ALL = 1)
 
-**`legacy_digest(tx: Transaction, input_index: int, script_sig: bytes, sighash_type: int = 1) -> bytes`**
-- Calculate legacy transaction digest (pre-SegWit)
+**`sign_p2sh_multisig_input(tx: Transaction, input_index: int, private_keys_for_input: List[bytes], redeem_script: bytes, sighash_type: int = 1)`**
+- Sign a P2SH multisig input (BIP-11). Produces `OP_0 <sig1> ... <sigM> <redeem_script>`.
+- `private_keys_for_input` must contain at least M keys that match pubkeys in the redeem script.
+
+**`legacy_digest(tx: Transaction, input_index: int, script_code: bytes, sighash_type: int = 1) -> bytes`**
+- Calculate legacy transaction digest (pre-SegWit SIGHASH_ALL)
 - **Returns**: 32-byte digest
 
 ### SegWitSigner Class
@@ -2118,19 +2678,37 @@ SegWit transaction signer (BIP-143) for P2WPKH addresses.
 
 #### Static Methods
 
-**`sign_transaction(tx: Transaction, utxos: List[dict], private_keys: List[bytes]) -> Transaction`**
-- Sign a complete transaction with SegWit inputs
+**`sign_transaction(tx: Transaction, utxos: List[dict], private_keys: Union[List[bytes], List[List[bytes]]]) -> Transaction`**
+- Sign a complete transaction with SegWit inputs (P2WPKH or P2WSH)
 - **Parameters**:
   - `tx` - Unsigned transaction
-  - `utxos` - List of UTXO dictionaries (must be P2WPKH addresses)
-  - `private_keys` - List of private keys (32 bytes each)
+  - `utxos` - List of UTXO dictionaries. P2WSH inputs must include `witness_script`; multisig inputs may also include `cosigner_keys`.
+  - `private_keys` - Flat, nested, or mixed list of keys (same format as `TransactionSigner`)
 - **Returns**: Signed transaction
 - **Raises**: `SigningError` if signing fails
 
-**`sign_input(tx: Transaction, input_index: int, utxo: dict, private_key: bytes)`**
-- Sign a single SegWit input
+**`sign_p2wpkh_input(tx: Transaction, input_index: int, utxo: dict, private_key: bytes)`**
+- Sign a P2WPKH input. Sets `witness = [sig, pubkey]`.
 - **Parameters**:
-  - `tx` - Transaction (will be modified)
+  - `tx` - Transaction (modified in place)
+  - `input_index` - Input index to sign
+  - `utxo` - UTXO dict with `value` and `address`
+  - `private_key` - 32-byte private key
+
+**`sign_p2wsh_input(tx: Transaction, input_index: int, utxo: dict, keys_for_input: List[bytes])`**
+- Sign a P2WSH input (single-sig or multisig).
+- For multisig: `witness = [b"", sig1, ..., sigM, witness_script]`
+- For single-sig: `witness = [sig, pubkey, witness_script]`
+- **Parameters**:
+  - `tx` - Transaction (modified in place)
+  - `input_index` - Input index to sign
+  - `utxo` - UTXO dict with `value`, `address`, `witness_script`, and optionally `cosigner_keys`
+  - `keys_for_input` - All available private keys for this input
+
+**`sign_input(tx: Transaction, input_index: int, utxo: dict, private_key: bytes)`**
+- Backward-compatible alias for `sign_p2wpkh_input`. Signs a single P2WPKH input.
+- **Parameters**:
+  - `tx` - Transaction (modified in place)
   - `input_index` - Input index to sign
   - `utxo` - UTXO dictionary
   - `private_key` - 32-byte private key

@@ -62,7 +62,7 @@ class FeeCalculator:
         fee = size * fee_rate
         
         # Minimum fee
-        min_fee = 1000  # 1000 Tenos minimum
+        min_fee = 0  # 0 Tenos minimum
         return max(fee, min_fee)
     
     @staticmethod
