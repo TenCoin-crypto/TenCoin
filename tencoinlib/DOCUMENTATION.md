@@ -8,19 +8,20 @@ Complete and comprehensive documentation for the Tencoinlib Python library.
 2. [Installation](#installation)
 3. [Quick Start](#quick-start)
 4. [Wallet](#wallet)
-5. [Transactions](#transactions)
-6. [RPC Client](#rpc-client)
-7. [Address Utilities](#address-utilities)
-8. [Fee Management](#fee-management)
-9. [Key Management](#key-management)
-10. [Transaction Signing](#transaction-signing)
-11. [Multisig Transactions](#multisig-transactions)
-12. [Message Signing](#message-signing)
-13. [Complete Examples](#complete-examples)
-14. [API Reference](#api-reference)
-15. [Error Handling](#error-handling)
-16. [Constants and Configuration](#constants-and-configuration)
-17. [Best Practices](#best-practices)
+5. [Wallet Storage](#wallet-storage)
+6. [Transactions](#transactions)
+7. [RPC Client](#rpc-client)
+8. [Address Utilities](#address-utilities)
+9. [Fee Management](#fee-management)
+10. [Key Management](#key-management)
+11. [Transaction Signing](#transaction-signing)
+12. [Multisig Transactions](#multisig-transactions)
+13. [Message Signing](#message-signing)
+14. [Complete Examples](#complete-examples)
+15. [API Reference](#api-reference)
+16. [Error Handling](#error-handling)
+17. [Constants and Configuration](#constants-and-configuration)
+18. [Best Practices](#best-practices)
 
 ---
 
@@ -44,6 +45,8 @@ Complete and comprehensive documentation for the Tencoinlib Python library.
 - ✅ **Key Derivation**: Standard BIP-84 derivation path `m/84'/5353'/0'/0/0` + generic BIP-32 paths
 - ✅ **Mnemonic Phrases**: 12, 15, 18, 21, or 24 word English mnemonics
 - ✅ **Wallet Recovery**: Restore wallets from mnemonic phrases
+- ✅ **Encrypted Wallet Storage**: TCW v1 binary format with AES-256-GCM encryption and Argon2id key derivation
+- ✅ **Locked/Unlocked State Machine**: Secret material only in RAM when needed; explicit lock/unlock lifecycle
 - ✅ **Transaction Building**: Create and sign transactions with all address types
 - ✅ **RPC Client**: Connect to Tencoin nodes via JSON-RPC
 - ✅ **Fee Calculation**: Automatic fee estimation and management
@@ -88,6 +91,8 @@ pip install tencoinlib[mnemonic]
 - `requests>=2.28.0` - For RPC client
 - `bech32>=1.2.0` - For SegWit address encoding
 - `coincurve>=13.0.0` - For message signing and public key recovery
+- `cryptography>=41.0.0` - For AES-256-GCM wallet encryption
+- `argon2-cffi>=21.3.0` - For Argon2id key derivation
 
 ---
 
@@ -98,12 +103,14 @@ pip install tencoinlib[mnemonic]
 ```python
 from tencoinlib import Wallet
 
-# Create a new wallet with 12-word mnemonic
+# Create a new wallet with 12-word mnemonic (returned UNLOCKED)
 wallet = Wallet.create()
 
 print(f"Mnemonic: {wallet.get_mnemonic()}")
-print(f"Address: {wallet.get_address()}")
-print(f"Private Key: {wallet.get_private_key_hex()}")
+print(f"Address:  {wallet.get_address()}")
+
+# Save to an encrypted .tcw file
+wallet.save("my_wallet.tcw", password="my-strong-password")
 ```
 
 ### Recover a Wallet
@@ -125,8 +132,8 @@ from tencoinlib import Wallet, TransactionBuilder, TransactionSigner
 from tencoinlib.rpc import RPCClient
 from tencoinlib.transaction.address import address_to_script
 
-# Setup
-wallet = Wallet.recover("your mnemonic phrase")
+# Load and unlock wallet from encrypted file
+wallet = Wallet.load("my_wallet.tcw").unlock("my-strong-password")
 rpc = RPCClient(host="127.0.0.1", port=10111, token="your-token")
 
 # Get UTXOs
@@ -394,39 +401,120 @@ for i in range(3):
     print(f"  {i}: {addr}")
 ```
 
-### Wallet Serialization
+### Wallet Storage
 
-#### Export Wallet Information
+Wallets are saved as **TCW v1** (TenCoin Wallet) encrypted binary files. Every `.tcw` file on disk is always encrypted — there is no plaintext save option.
 
-```python
-# Convert wallet to dictionary
-wallet_dict = wallet.to_dict()
-print(wallet_dict)
-# {
-#     "mnemonic": "word1 word2 ...",
-#     "address": "tc1q...",
-#     "public_key": "02...",
-#     "private_key": "abc123...",
-#     "derivation_path": "m/84'/5353'/0'/0/0",
-#     "account_index": 0,
-#     "change_index": 0,
-#     "address_index": 0,
-#     "seed_available": True
-# }
+#### TCW v1 Format
+
+The `.tcw` file uses a binary container with the following structure:
+
+```
+┌──────────────────────────────┐
+│ Magic + Version   4 bytes    │  b"TCW" + 0x01
+│ KDF / Cipher IDs  2 bytes    │  Argon2id / AES-256-GCM
+│ Flags, lengths    6 bytes    │
+│ Payload length    8 bytes    │
+├──────────────────────────────┤
+│ Salt             32 bytes    │  random, stored in file
+│ KDF parameters    4 bytes    │  time/memory/parallelism
+│ Nonce            12 bytes    │  random, unique per save
+├──────────────────────────────┤
+│ Encrypted payload            │  AES-256-GCM ciphertext
+│ + GCM tag        16 bytes    │  authentication tag
+└──────────────────────────────┘
 ```
 
-#### Save and Load Wallet
+The fixed header is used as **AAD** (Additional Authenticated Data), meaning any tampering with the header — including version, algorithm IDs, or length fields — causes decryption to fail.
+
+#### Save Wallet
+
+The wallet must be **unlocked** to save (secrets need to be in RAM).
 
 ```python
-# Save wallet to file
-wallet.save_to_file("my_wallet.json")
+# Create a new wallet (returned UNLOCKED)
+wallet = Wallet.create()
 
-# Load wallet from file
-wallet = Wallet.load_from_file("my_wallet.json")
+# Save to encrypted .tcw file
+wallet.save("my_wallet.tcw", password="my-strong-password")
 
-# Note: Wallet encryption is not yet implemented
-# The wallet file is stored in plain JSON format
-# For production use, implement additional encryption
+# save_to_file() is an alias
+wallet.save_to_file("my_wallet.tcw", password="my-strong-password")
+```
+
+#### Load Wallet (Locked)
+
+`Wallet.load()` reads only the file header — no decryption, no secrets in RAM.
+
+```python
+# Load header only — wallet is LOCKED
+wallet = Wallet.load("my_wallet.tcw")
+
+print(wallet.is_locked)   # True
+print(wallet.address)     # available (empty until unlocked)
+```
+
+#### Unlock Wallet
+
+```python
+wallet = Wallet.load("my_wallet.tcw")
+wallet.unlock("my-strong-password")
+
+print(wallet.is_locked)              # False
+print(wallet.get_mnemonic())         # available
+print(wallet.get_private_key_hex())  # available
+```
+
+#### Load and Unlock (one-liner)
+
+```python
+# Equivalent to Wallet.load(path).unlock(password)
+wallet = Wallet.load_from_file("my_wallet.tcw", password="my-strong-password")
+```
+
+#### Lock Wallet
+
+Call `lock()` to discard all secret material from RAM. Public metadata (address, indices) is preserved.
+
+```python
+wallet.unlock("my-strong-password")
+# ... do work ...
+wallet.lock()
+
+print(wallet.is_locked)   # True
+# wallet.get_mnemonic()   → raises WalletLockedError
+```
+
+#### Context Manager (Auto-lock)
+
+The `unlocked()` context manager unlocks the wallet, yields it, then automatically locks on exit — even if an exception occurs.
+
+```python
+with wallet.unlocked("my-strong-password") as w:
+    signed_tx = w.sign_transaction(tx)
+    mnemonic  = w.get_mnemonic()
+
+# wallet is locked again here
+print(wallet.is_locked)   # True
+```
+
+#### Checking Wallet State
+
+```python
+print(wallet.is_locked)    # True / False
+print(wallet.wallet_type)  # "hd" | "xpub" | "xprv"
+print(wallet.is_watch_only)
+```
+
+#### Wrong Password
+
+```python
+from tencoinlib import WalletAuthError
+
+try:
+    wallet.unlock("wrong-password")
+except WalletAuthError:
+    print("Wrong password or corrupted file")
 ```
 
 ---
@@ -2242,18 +2330,28 @@ Unlike Bitcoin (which almost exclusively produces `H` or `I` signatures due to i
 ### Example 1: Complete Wallet Setup
 
 ```python
-from tencoinlib import Wallet
+from tencoinlib import Wallet, WalletAuthError
 from tencoinlib.rpc import RPCClient
 from tencoinlib.constants import TENOS_PER_TEC
+import os
 
-# Create or recover wallet
-mnemonic = input("Enter mnemonic (or press Enter to create new): ")
-if mnemonic:
-    wallet = Wallet.recover(mnemonic)
-else:
+WALLET_FILE = "my_wallet.tcw"
+
+# Create a new wallet or load an existing one
+if not os.path.exists(WALLET_FILE):
     wallet = Wallet.create()
-    print(f"\n⚠️  IMPORTANT: Save this mnemonic phrase!")
+    print(f"\n⚠️  IMPORTANT: Save this mnemonic phrase safely!")
     print(f"Mnemonic: {wallet.get_mnemonic()}\n")
+    password = input("Set a wallet password: ")
+    wallet.save(WALLET_FILE, password=password)
+    print(f"Wallet saved to {WALLET_FILE}")
+else:
+    password = input("Enter wallet password: ")
+    try:
+        wallet = Wallet.load(WALLET_FILE).unlock(password)
+    except WalletAuthError:
+        print("Wrong password!")
+        exit(1)
 
 # Connect to node
 rpc = RPCClient(host="127.0.0.1", port=10111, token="your-token")
@@ -2261,30 +2359,38 @@ rpc = RPCClient(host="127.0.0.1", port=10111, token="your-token")
 # Get balance
 address = wallet.get_address()
 balance_tenos = rpc.get_balance(address)
-balance_tec = balance_tenos / TENOS_PER_TEC
+balance_tec   = balance_tenos / TENOS_PER_TEC
 
 print(f"\nWallet Information:")
 print(f"Address: {address}")
-print(f"Balance: {balance_tec:.8f} TEC")
-print(f"Balance: {balance_tenos} Tenos")
+print(f"Balance: {balance_tec:.8f} TEC ({balance_tenos} Tenos)")
 
 # Show UTXOs
 utxos = rpc.list_unspent(address)
 print(f"\nUnspent Outputs: {len(utxos)}")
 for utxo in utxos:
     print(f"  {utxo['amount']} Tenos from {utxo['txid'][:16]}...")
+
+# Lock when done
+wallet.lock()
 ```
 
 ### Example 2: Complete Send Transaction
 
 ```python
-from tencoinlib import Wallet, TransactionBuilder, TransactionSigner
+from tencoinlib import Wallet, TransactionBuilder, TransactionSigner, WalletAuthError
 from tencoinlib.rpc import RPCClient
 from tencoinlib.constants import TENOS_PER_TEC
 from tencoinlib.transaction.address import address_to_script
 
-# Setup
-wallet = Wallet.recover("your mnemonic phrase")
+# Load and unlock wallet
+password = input("Wallet password: ")
+try:
+    wallet = Wallet.load("my_wallet.tcw").unlock(password)
+except WalletAuthError:
+    print("Wrong password!")
+    exit(1)
+
 rpc = RPCClient(host="127.0.0.1", port=10111, token="your-token")
 sender_address = wallet.get_address()
 
@@ -2444,103 +2550,122 @@ print(f"\nNext Receiving Address: {next_addr}")
 **`Wallet.create(strength: int = 128) -> Wallet`**
 - Create a new HD wallet from a freshly generated BIP-39 mnemonic
 - **Parameters**: `strength` - Entropy strength in bits (128, 160, 192, 224, 256)
-- **Returns**: New `Wallet` instance
+- **Returns**: New `Wallet` instance (UNLOCKED)
 
 **`Wallet.recover(mnemonic: str, passphrase: str = "") -> Wallet`**
 - Recover wallet from mnemonic phrase
-- **Parameters**: 
+- **Parameters**:
   - `mnemonic` - BIP-39 mnemonic phrase
   - `passphrase` - Optional BIP-39 passphrase
-- **Returns**: Recovered `Wallet` instance
+- **Returns**: Recovered `Wallet` instance (UNLOCKED)
 - **Raises**: `WalletError` if mnemonic is invalid
 
 **`Wallet.from_xpub(xpub: str) -> Wallet`**
-- Create a **watch-only** wallet from a master/account xpub
+- Create a watch-only wallet from a master/account xpub
 - Can derive addresses via `derive_address_from_xpub`, but has no access to private keys or seed
 
 **`Wallet.from_xprv(xprv: str) -> Wallet`**
 - Create a wallet from a master/account xprv
 - Full private derivation is available, but no mnemonic/seed is required
 
-**`Wallet.load_from_file(filepath: str, password: Optional[str] = None) -> Wallet`**
-- Load wallet from file
-- **Parameters**: 
-  - `filepath` - Path to wallet file
-  - `password` - Encryption password (not yet implemented)
-- **Returns**: `Wallet` instance
+**`Wallet.load(filepath: str) -> Wallet`**
+- Read a `.tcw` file header without decrypting — returns a LOCKED wallet
+- **Parameters**: `filepath` - Path to a `.tcw` file
+- **Returns**: LOCKED `Wallet` instance
+- **Raises**: `TCWFormatError` if file is invalid, `TCWVersionError` if version unsupported, `FileNotFoundError`
+
+**`Wallet.load_from_file(filepath: str, password: str) -> Wallet`**
+- Convenience method: load and fully decrypt in one call
+- Equivalent to `Wallet.load(filepath).unlock(password)`
+- **Returns**: UNLOCKED `Wallet` instance
+
+#### Lock / Unlock
+
+**`wallet.unlock(password: str) -> Wallet`**
+- Decrypt the wallet's `.tcw` file and load secrets into RAM
+- **Returns**: self (UNLOCKED) — supports chaining: `Wallet.load(path).unlock(pw)`
+- **Raises**: `WalletAuthError` if password is wrong or file is corrupted, `WalletError` if no `.tcw` file is associated
+
+**`wallet.lock() -> None`**
+- Discard all secret material from RAM; set state to LOCKED
+- Public metadata (address, xpub, indices) is preserved
+
+**`wallet.unlocked(password: str) -> ContextManager`**
+- Context manager: unlock on enter, lock on exit (even if an exception occurs)
+- Usage: `with wallet.unlocked("pw") as w: ...`
+
+**`wallet.is_locked -> bool`** *(property)*
+- `True` when no secret material is held in RAM
+
+#### Persistence
+
+**`wallet.save(filepath: str, password: str) -> None`**
+- Encrypt and write wallet to a TCW v1 binary file
+- Wallet must be UNLOCKED; password must be at least 8 characters
+- **Raises**: `WalletLockedError`, `ValueError` if password too short
+
+**`wallet.save_to_file(filepath: str, password: str) -> None`**
+- Alias for `save()`
 
 #### Instance Methods
 
 **`get_address(type: str = "p2wpkh", script: Optional[bytes] = None) -> str`**
 - Get address for the current key in the requested form
+- `p2wpkh` is available while LOCKED; `p2pkh` and `p2sh` require UNLOCKED
 - **Parameters**:
-  - `type`: One of "p2wpkh" (default), "p2pkh", "p2sh", "p2wsh"
-  - `script`: For "p2sh" (optional) or "p2wsh" (required), the redeem/witness script bytes
-- **Returns**: Address string (tc1q..., T..., or M...)
-- **Example**: `wallet.get_address("p2pkh")` → T..., `wallet.get_address("p2wsh", script=witness_script)` → tc1q...
+  - `type`: One of `"p2wpkh"` (default), `"p2pkh"`, `"p2sh"`, `"p2wsh"`
+  - `script`: For `"p2sh"` (optional) or `"p2wsh"` (required)
+- **Returns**: Address string (`tc1q...`, `T...`, or `M...`)
 
 **`get_private_key_hex() -> str`**
-- Get private key as hex string for the default address
-- **Raises**: `WalletError` in watch-only wallets
+- Get private key as hex string (UNLOCKED required)
+- **Raises**: `WalletLockedError`, `WalletError` in watch-only wallets
 
 **`get_public_key_hex() -> str`**
-- Get public key as hex string (compressed) for the default address
+- Get public key as hex string (compressed); available while LOCKED
 
 **`get_mnemonic() -> str`**
-- Get mnemonic phrase (if available)
-- **Raises**: `WalletError` if mnemonic not available
+- Get mnemonic phrase (UNLOCKED required)
+- **Raises**: `WalletLockedError`, `WalletError` if wallet has no mnemonic
 
 **`get_master_xprv() -> str`**
-- Get master xprv (`m`) as Base58Check string (non-watch-only wallets only)
+- Get master xprv as Base58Check string (UNLOCKED required, non-watch-only only)
 
 **`get_master_xpub() -> str`**
-- Get master xpub (`m`) as Base58Check string
+- Get master xpub as Base58Check string
 
 **`derive_xprv(path: str) -> str`**
-- Derive extended private key at a BIP-32 path such as `"m/84'/5353'/0'"` (non-watch-only only)
+- Derive extended private key at a BIP-32 path (UNLOCKED required, non-watch-only only)
 
 **`derive_xpub(path: str) -> str`**
 - Derive extended public key at a BIP-32 path
-- From full wallets: supports hardened + non-hardened paths
-- From watch-only (xpub-only) wallets: only non-hardened paths are allowed
+- Full wallets support hardened + non-hardened; watch-only: non-hardened only
 
 **`get_account_xprv(account: int) -> str`**
-- Get account-level xprv at `m/84'/5353'/account'` (non-watch-only only)
+- Get account-level xprv at `m/84'/5353'/account'` (UNLOCKED required)
 
 **`get_account_xpub(account: int) -> str`**
 - Get account-level xpub at `m/84'/5353'/account'`
 
 **`derive_address(account: int = 0, change: int = 0, index: int = 0) -> Tuple[str, str]`**
-- Derive address at specific BIP-84 path from the seed
+- Derive BIP-84 address at a specific path (UNLOCKED required)
 - **Returns**: `(private_key_hex, address)`
-- **Raises**: `WalletError` in watch-only wallets
 
 **`get_next_address(change: int = 0) -> Tuple[str, str]`**
-- Get next unused address in sequence for the current account
+- Increment address index and return the next address (UNLOCKED required)
 - **Returns**: `(private_key_hex, address)`
-- **Raises**: `WalletError` in watch-only wallets
 
 **`derive_address_from_xpub(change: int, index: int) -> str`**
-- Derive an address from the wallet's base xpub (watch-only or full)
-- For BIP-84 account xpubs, this corresponds to `m/84'/5353'/account'/change/index`
+- Derive address from the wallet's base xpub; watch-only safe
 
-**`export_xpub(path: str) -> str`**
-- Export an xpub at an arbitrary BIP-32 path (wrapper around `derive_xpub`)
-
-**`export_xprv(path: str) -> str`**
-- Export an xprv at an arbitrary BIP-32 path (non-watch-only only; wrapper around `derive_xprv`)
-
-**`import_xpub(xpub: str) -> None`**
-- Import an external xpub and treat it as the wallet's base xpub for watch-only derivation
-
+**`export_xpub(path: str) -> str`**  
+**`export_xprv(path: str) -> str`**  
+**`import_xpub(xpub: str) -> None`**  
 **`import_xprv(xprv: str) -> None`**
-- Import an external xprv and treat it as the wallet's base xprv/xpub
+- BIP-32 import/export helpers; xprv operations require UNLOCKED
 
-**`to_dict() -> Dict`**
-- Convert wallet to dictionary, including `is_watch_only` and imported xpub/xprv metadata
-
-**`save_to_file(filepath: str, password: Optional[str] = None)`**
-- Save wallet to file (unencrypted JSON; encryption not yet implemented)
+**`wallet_type -> str`** *(property)*
+- One of `"hd"`, `"xpub"`, `"xprv"`
 
 ### TransactionBuilder Class
 
@@ -2879,7 +3004,8 @@ SegWit transaction signer (BIP-143) for P2WPKH addresses.
 ### Exception Classes
 
 ```python
-from tencoinlib import WalletError
+from tencoinlib import WalletError, WalletLockedError, WalletAuthError
+from tencoinlib.wallet_storage.tcw import TCWFormatError, TCWVersionError, TCWAuthError
 from tencoinlib.transaction import (
     TransactionBuilderError,
     SigningError,
@@ -2899,12 +3025,35 @@ from tencoinlib.message import MessageSigningError
 ### Wallet Errors
 
 ```python
-from tencoinlib import Wallet, WalletError
+from tencoinlib import Wallet, WalletError, WalletLockedError, WalletAuthError
+from tencoinlib.wallet_storage.tcw import TCWFormatError, TCWVersionError
 
+# Invalid mnemonic
 try:
     wallet = Wallet.recover("invalid mnemonic")
 except WalletError as e:
     print(f"Wallet error: {e}")
+
+# Wrong password
+try:
+    wallet = Wallet.load("my_wallet.tcw").unlock("wrong-password")
+except WalletAuthError:
+    print("Wrong password or file is corrupted")
+
+# Operation on a locked wallet
+wallet = Wallet.load("my_wallet.tcw")   # LOCKED
+try:
+    wallet.get_mnemonic()               # requires UNLOCKED
+except WalletLockedError as e:
+    print(f"Wallet is locked: {e}")
+
+# Invalid or unsupported .tcw file
+try:
+    wallet = Wallet.load("not_a_wallet.bin")
+except TCWFormatError as e:
+    print(f"Not a valid TCW file: {e}")
+except TCWVersionError as e:
+    print(f"Unsupported TCW version: {e}")
 ```
 
 ### Transaction Errors
@@ -3057,28 +3206,53 @@ from tencoinlib.constants import (
 
 ### Security
 
-1. **Never share private keys or mnemonics**
-   - Store mnemonics securely (offline, encrypted)
-   - Never commit private keys to version control
+1. **Always save wallets to encrypted `.tcw` files**
+   ```python
+   wallet.save("my_wallet.tcw", password="strong-password")
+   ```
+   Never store raw mnemonics or private keys in plaintext files.
 
-2. **Use passphrases for additional security**
+2. **Keep wallets locked when not in use**
+   ```python
+   # Preferred: context manager auto-locks on exit
+   with wallet.unlocked("my-password") as w:
+       signed_tx = w.sign_transaction(tx)
+
+   # Or lock explicitly
+   wallet.unlock("my-password")
+   # ... do work ...
+   wallet.lock()
+   ```
+
+3. **Use BIP-39 passphrases for additional protection**
    ```python
    wallet = Wallet.recover(mnemonic, passphrase="strong-passphrase")
    ```
+   The passphrase is separate from the file encryption password and provides a second layer of security.
 
-3. **Validate addresses before sending**
+4. **Use strong, unique passwords for wallet files**
+   - Minimum 8 characters (enforced)
+   - Argon2id KDF makes brute-force attacks expensive
+   - A strong password is the last line of defence if the `.tcw` file is stolen
+
+5. **Back up the mnemonic phrase — not the `.tcw` file**
+   - The `.tcw` file can always be recreated from the mnemonic
+   - Store the mnemonic offline and in a physically secure location
+   - Never commit mnemonics or `.tcw` files to version control
+
+6. **Validate addresses before sending**
    ```python
    from tencoinlib.transaction import is_valid_address
    if not is_valid_address(recipient_address):
        raise ValueError("Invalid recipient address")
    ```
 
-4. **Double-check transaction details**
+7. **Double-check transaction details**
    - Always verify recipient address
    - Confirm amount before broadcasting
    - Check fee is reasonable
 
-5. **Use change addresses**
+8. **Use change addresses**
    - Always set a change address to protect privacy
    - Use new change addresses for each transaction
 
